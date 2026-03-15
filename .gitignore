@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual env / local env
+.venv/
+.env
+
+# Runtime state
+.ejarn_history.json
+.hitl_status.json
+.hitl_confirm.json
+
+# Output artifacts
+*.json
+
+# Keep sample/config docs if needed
+!schema.example.json
