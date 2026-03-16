@@ -14,7 +14,14 @@ eJARN 기사 수집 후, 고정 JSON 스키마로 정규화하여 출력하는 P
 - Streamlit에서는 수집이 **백그라운드 프로세스**에서 실행됩니다.
 - 로그인 대기 중 현재 상태(URL/판정값/대기 시간)를 UI에 표시합니다.
 - 사용자가 Chrome에서 캡차/로그인을 완료한 뒤, Streamlit의 `✅ 로그인 완료(진행)` 버튼을 누르면 다음 단계로 진행합니다.
-- 수집 기록은 `.ejarn_history.json`으로 저장되며, 앱 재시작 후에도 프로젝트 폴더의 기존 JSON 결과를 자동 스캔해 히스토리에 표시합니다.
+- 수집 기록은 `.ejarn_history.json`으로 저장되며, 앱 재시작 후에도 `result/` 폴더의 JSON 결과를 자동 스캔해 히스토리에 표시합니다.
+- 수집 히스토리 라벨은 JSON의 주제명이 아니라 **파일명**으로 표시됩니다.
+
+### 결과 파일 저장 위치
+
+- CLI(`main.py`)와 Streamlit(`streamlit_app.py`) 모두 결과 JSON을 프로젝트 내 `result/` 폴더에 저장합니다.
+- 기본 파일명 규칙: `선택항목명_YYMM.json`
+  - 예: `eJarn_News_2603.json`, `Event_Exhibition_2603.json`
 
 ## 요구사항
 
@@ -27,6 +34,12 @@ python -m playwright install chromium
 ```
 
 ## 환경 변수 (.env)
+
+프로젝트 시작 시 `.env.sample`을 복사해 `.env`를 만든 뒤 실제 값을 입력하세요.
+
+```bash
+copy .env.sample .env
+```
 
 필수:
 
@@ -65,6 +78,34 @@ python main.py --publication-jarn-regular -o publication_jarn_regular.json
 # Streamlit 앱 실행
 streamlit run streamlit_app.py
 ```
+
+### GitHub의 index.html로 시작하는 운영 방식
+
+프로젝트 루트의 `index.html`은 **GitHub에서 먼저 열어보고**, 그 다음 로컬 PC의 Streamlit으로 이동하는 시작 페이지로 사용할 수 있습니다.
+
+권장 흐름:
+
+1. GitHub Pages 또는 GitHub 저장소의 `index.html` 확인
+2. PC에서 아래 명령으로 Streamlit 실행
+
+```bash
+streamlit run streamlit_app.py
+```
+
+3. `index.html`의 **로컬 Streamlit 열기** 버튼 클릭
+4. 브라우저에서 `http://127.0.0.1:8501` 새 탭으로 이동
+
+중요:
+
+- GitHub의 `index.html`은 Python(`streamlit_app.py`)을 **직접 실행할 수 없습니다**.
+- 브라우저 보안 정책상 GitHub(HTTPS) 페이지에서 로컬 Streamlit(HTTP)을 iframe/fetch로 직접 붙이는 방식은 제한될 수 있습니다.
+- 따라서 현재는 **GitHub의 index.html = 실행 안내/런처**, **로컬 PC = Streamlit 실제 실행 주체**로 두는 것이 가장 안정적입니다.
+
+### 기존 코드 수정이 필요한가?
+
+- **핵심 수집 로직(`main.py`, `streamlit_app.py`) 수정은 필수 아님**
+- 이번 목적을 위해 필요한 것은 `index.html`의 역할을 “임베드 페이지”가 아니라 “로컬 앱 실행 안내/열기 페이지”로 두는 것입니다.
+- 즉, 기존 Python 기능은 그대로 유지하고 웹 진입점만 바꾸는 방식으로 운영 가능합니다.
 
 실행 중 터미널 안내:
 
@@ -143,6 +184,13 @@ streamlit run streamlit_app.py
 - 앱 시작 시 프로젝트 폴더 JSON 자동 스캔 후 히스토리 병합
 - HITL 로그인 상태(UI) 실시간 표시 추가 (stage/url/판정)
 - Streamlit에서 `로그인 완료(진행)` 버튼 신호 기반으로 다음 단계 진행
+
+## 최근 업데이트 (2026-03-16)
+
+- 모든 결과 JSON 저장 위치를 `result/` 폴더로 통일
+- Streamlit 히스토리 스캔 경로를 `result/`로 변경
+- Streamlit 히스토리 표시명을 JSON 파일명 기준으로 변경
+- `index.html`을 GitHub에서 확인 후 로컬 Streamlit으로 이동하는 런처 페이지로 변경
 
 ## 참고
 

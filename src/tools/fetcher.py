@@ -234,6 +234,28 @@ def _hitl_login_chrome(page, email: str, password: str) -> bool:
             file=sys.stderr,
         )
 
+        def _proceed_after_ack(reason: str) -> bool:
+            """'완료' 신호를 받으면 즉시 다음 단계로 진행한다."""
+            try:
+                if page.query_selector("input[name='password']"):
+                    page.click("button[type='submit'], input[type='submit'], form button")
+                    page.wait_for_load_state("domcontentloaded", timeout=4000)
+            except Exception:
+                pass
+
+            waited = 0
+            if _is_logged_in(page):
+                _emit_hitl_status(page, "login_success", f"{reason} 후 로그인 성공 확인", waited)
+            else:
+                _emit_hitl_status(
+                    page,
+                    "login_unverified_proceed",
+                    f"{reason} 신호에 따라 로그인 성공 미확인 상태지만 다음 단계로 진행합니다.",
+                    waited,
+                )
+            print(f"[HITL] {reason}: 다음 단계로 진행합니다.", file=sys.stderr)
+            return True
+
         def _wait_login_non_interactive(timeout_sec: int = 600) -> bool:
             print(
                 f"[HITL] 비대화형 환경 감지: 로그인 완료까지 최대 {timeout_sec}초 대기합니다.",
@@ -340,6 +362,16 @@ def _hitl_login_chrome(page, email: str, password: str) -> bool:
         )
 
         if force_non_interactive or (not sys.stdin or not sys.stdin.isatty()):
+            # PowerShell 파이프 입력 예: "완료" | python main.py ...
+            # 비대화형이지만 표준입력으로 신호가 들어오면 즉시 진행한다.
+            if not force_non_interactive:
+                try:
+                    _emit_hitl_status(page, "await_user_input", "표준입력에서 '완료' 신호 대기 중", 0)
+                    piped_ack = input("[HITL] 로그인 완료 시 '완료' 입력: ").strip()
+                    if piped_ack == "완료":
+                        return _proceed_after_ack("표준입력 완료")
+                except EOFError:
+                    pass
             return _wait_login_non_interactive(600)
 
         try:
@@ -354,24 +386,7 @@ def _hitl_login_chrome(page, email: str, password: str) -> bool:
             warnings.warn("HITL 완료 입력이 없어 비로그인 모드로 계속합니다.", UserWarning)
             return False
 
-        # 사용자가 로그인 버튼까지 누르지 않았다면 자동으로 1회 시도
-        if page.query_selector("input[name='password']"):
-            try:
-                page.click("button[type='submit'], input[type='submit'], form button")
-                page.wait_for_load_state("domcontentloaded", timeout=10000)
-            except Exception:
-                pass
-
-        _random_delay(1200, 2200)
-        logged_in = _is_logged_in(page)
-        _emit_hitl_status(
-            page,
-            "login_success" if logged_in else "login_failed",
-            "로그인 성공" if logged_in else "로그인 실패/미확인",
-            0,
-        )
-        print(f"[HITL] 로그인 {'성공' if logged_in else '실패/미확인'} (URL: {page.url})", file=sys.stderr)
-        return logged_in
+        return _proceed_after_ack("터미널 완료 입력")
     except Exception as e:
         _emit_hitl_status(page, "login_error", f"로그인 오류: {e}", 0)
         warnings.warn(f"HITL 로그인 실패: {e}", UserWarning)

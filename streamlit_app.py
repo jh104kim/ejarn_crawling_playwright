@@ -12,6 +12,7 @@ from openai import OpenAI
 HISTORY_FILE = Path(__file__).parent / ".ejarn_history.json"
 HITL_STATUS_FILE = Path(__file__).parent / ".hitl_status.json"
 HITL_CONFIRM_FILE = Path(__file__).parent / ".hitl_confirm.json"
+RESULT_DIR = Path(__file__).parent / "result"
 MAX_HISTORY = 30  # 최대 보관 건수
 
 from src.pipeline import (
@@ -31,6 +32,17 @@ TOPIC_OPTIONS = {
     "Report": "https://www.ejarn.com/category/report_index",
     "Special Issue": "https://www.ejarn.com/category/special_issue_index",
     "Regular Issue": "https://www.ejarn.com/category/regular_issue_index",
+}
+
+OUTPUT_BASENAME_BY_URL = {
+    "https://www.ejarn.com/series/index/1": "Jarn_Regular",
+    "https://www.ejarn.com/series/index/2": "Jarn_Special",
+    "https://www.ejarn.com/category/eJarn_news_index": "eJarn_News",
+    "https://www.ejarn.com/category/cover_story_index": "Cover_Story",
+    "https://www.ejarn.com/category/exhibition_index": "Event_Exhibition",
+    "https://www.ejarn.com/category/report_index": "Report",
+    "https://www.ejarn.com/category/special_issue_index": "Special_Issue",
+    "https://www.ejarn.com/category/regular_issue_index": "Regular_Issue",
 }
 
 
@@ -101,7 +113,9 @@ def _run_collection(selected_url: str, max_items: int, disable_ssl_verify: bool)
     )
 
 
-def _collection_worker(selected_url: str, max_items: int, disable_ssl_verify: bool, queue: mp.Queue) -> None:
+def _collection_worker(
+    selected_url: str, max_items: int, disable_ssl_verify: bool, queue: mp.Queue
+) -> None:
     """Playwright 수집을 별도 프로세스에서 수행해 Windows asyncio 충돌을 피한다."""
     try:
         os.environ["EJARN_HITL_STATUS_FILE"] = str(HITL_STATUS_FILE.resolve())
@@ -188,7 +202,9 @@ def _format_hitl_status(status_payload: dict) -> str:
     if msg:
         base += f"\n- {msg}"
     if stage == "login_unverified_proceed":
-        base += "\n- 안내: 완료 버튼 신호에 따라 로그인 확인 없이 다음 단계로 진행합니다."
+        base += (
+            "\n- 안내: 완료 버튼 신호에 따라 로그인 확인 없이 다음 단계로 진행합니다."
+        )
     if url:
         base += f"\n- URL: {url}"
     if any(v is not None for v in [on_login, has_logout, has_user_menu, has_cookie]):
@@ -202,6 +218,7 @@ def _format_hitl_status(status_payload: dict) -> str:
 # ---------------------------------------------------------------------------
 # 히스토리 헬퍼
 # ---------------------------------------------------------------------------
+
 
 def _load_history() -> list[dict]:
     """디스크에서 수집 히스토리를 읽어 반환한다."""
@@ -220,15 +237,19 @@ def _save_history(entry: dict) -> None:
     entries = [e for e in entries if e.get("file") != entry.get("file")]
     entries.insert(0, entry)  # 최신 항목이 맨 위
     entries = entries[:MAX_HISTORY]
-    HISTORY_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    HISTORY_FILE.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _scan_folder_json(folder: Path | None = None) -> list[dict]:
     """폴더 내 eJARN 결과 JSON 파일을 스캔해 히스토리 엔트리 목록으로 반환한다."""
-    import re
-    folder = folder or Path(__file__).parent
+    folder = folder or RESULT_DIR
+    folder.mkdir(parents=True, exist_ok=True)
     entries = []
-    for p in sorted(folder.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+    for p in sorted(
+        folder.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True
+    ):
         if p.resolve() == HISTORY_FILE.resolve():
             continue  # 히스토리 파일 자체는 제외
         try:
@@ -240,26 +261,19 @@ def _scan_folder_json(folder: Path | None = None) -> list[dict]:
         items = data.get("items")
         if not isinstance(items, list) or not items:
             continue  # eJARN 결과 파일이 아니면 제외
-        source = data.get("source", "eJARN")
         collected_at = data.get(
             "collected_at",
             datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
         )
-        # 파일명에서 날짜 파트를 추출해 label 생성
-        stem = p.stem  # e.g. ejarn_result_20260315_182721
-        m = re.search(r"(\d{8})", stem)
-        if m:
-            d = m.group(1)
-            label = f"{source} {d[:4]}-{d[4:6]}-{d[6:8]}"
-        else:
-            label = stem.replace("_", " ")
-        entries.append({
-            "label": label,
-            "url": "",
-            "file": str(p.resolve()),
-            "collected_at": collected_at,
-            "count": len(items),
-        })
+        entries.append(
+            {
+                "label": p.name,
+                "url": "",
+                "file": str(p.resolve()),
+                "collected_at": collected_at,
+                "count": len(items),
+            }
+        )
     return entries
 
 
@@ -270,18 +284,39 @@ def _sync_history_with_folder() -> None:
     - 새 파일만 추가, collected_at 기준 최신순 정렬
     """
     scanned = _scan_folder_json()
-    existing = _load_history()
+    result_root = str(RESULT_DIR.resolve())
+    existing = [
+        e
+        for e in _load_history()
+        if str(Path(e.get("file", "")).resolve()).startswith(result_root)
+    ]
     by_file: dict[str, dict] = {e["file"]: e for e in existing}
     for s in scanned:
         if s["file"] not in by_file:
             by_file[s["file"]] = s  # 새 파일만 추가
-    merged = sorted(by_file.values(), key=lambda e: e.get("collected_at", ""), reverse=True)
+    merged = sorted(
+        by_file.values(), key=lambda e: e.get("collected_at", ""), reverse=True
+    )
     merged = merged[:MAX_HISTORY]
-    HISTORY_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    HISTORY_FILE.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
-def _default_output_name() -> str:
-    return f"ejarn_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+def _default_output_name(selected_url: str) -> str:
+    base = OUTPUT_BASENAME_BY_URL.get(selected_url, "eJarn_Result")
+    yymm = datetime.now().strftime("%y%m")
+    return f"{base}_{yymm}.json"
+
+
+def _resolve_result_path(output_name: str, selected_url: str) -> Path:
+    """모든 결과 파일을 프로젝트 내 result 폴더에 저장한다."""
+    name = (output_name or "").strip() or _default_output_name(selected_url)
+    name = Path(name).name
+    if not name.lower().endswith(".json"):
+        name += ".json"
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    return RESULT_DIR / name
 
 
 def _truncate(text: str, max_len: int = 180) -> str:
@@ -365,10 +400,14 @@ def main() -> None:
         selected_label = st.selectbox("주제 선택", list(TOPIC_OPTIONS.keys()), index=0)
         selected_url = TOPIC_OPTIONS[selected_label]
 
-        max_items = st.number_input("수집 건수 (--max)", min_value=1, max_value=50, value=5, step=1)
+        max_items = st.number_input(
+            "수집 건수 (--max)", min_value=1, max_value=50, value=5, step=1
+        )
         disable_ssl_verify = st.checkbox("SSL 검증 비활성화", value=False)
 
-        output_name = st.text_input("저장 파일명", value=_default_output_name())
+        output_name = st.text_input(
+            "저장 파일명", value=_default_output_name(selected_url)
+        )
         if not output_name.lower().endswith(".json"):
             output_name += ".json"
 
@@ -395,11 +434,10 @@ def main() -> None:
                 ts = entry.get("collected_at", "")[:16].replace("T", " ")
                 count = entry.get("count", "?")
                 file_path = entry.get("file", "")
+                display_name = Path(file_path).name if file_path else label
 
-                is_active = (
-                    st.session_state.get("viewing_file") == file_path
-                )
-                btn_label = f"{label}\n{ts}  |  {count}건"
+                is_active = st.session_state.get("viewing_file") == file_path
+                btn_label = f"{display_name}\n{ts}  |  {count}건"
 
                 col_cls = "hist-active" if is_active else "hist-btn"
                 st.markdown(f'<div class="{col_cls}">', unsafe_allow_html=True)
@@ -407,7 +445,7 @@ def main() -> None:
                     try:
                         loaded = json.loads(Path(file_path).read_text(encoding="utf-8"))
                         st.session_state.viewing_result = loaded
-                        st.session_state.viewing_label = label
+                        st.session_state.viewing_label = display_name
                         st.session_state.viewing_file = file_path
                         st.session_state.chat_history = []
                     except Exception as e:
@@ -466,12 +504,16 @@ def main() -> None:
 
     if st.session_state.collecting:
         st.markdown("### 수집 진행 상태")
-        elapsed = int(time.time() - (st.session_state.collection_started_at or time.time()))
+        elapsed = int(
+            time.time() - (st.session_state.collection_started_at or time.time())
+        )
         st.info(f"수집 실행 중... 경과 {elapsed}초")
 
         if HITL_STATUS_FILE.exists() and elapsed >= 5:
             try:
-                status_payload = json.loads(HITL_STATUS_FILE.read_text(encoding="utf-8"))
+                status_payload = json.loads(
+                    HITL_STATUS_FILE.read_text(encoding="utf-8")
+                )
                 st.info(_format_hitl_status(status_payload))
             except Exception:
                 pass
@@ -479,11 +521,13 @@ def main() -> None:
         c_run_1, c_run_2, c_run_3 = st.columns(3)
         if c_run_1.button("✅ 로그인 완료(진행)", use_container_width=True):
             HITL_CONFIRM_FILE.write_text(
-                json.dumps({"confirmed_at": datetime.utcnow().isoformat()}, ensure_ascii=False),
+                json.dumps(
+                    {"confirmed_at": datetime.utcnow().isoformat()}, ensure_ascii=False
+                ),
                 encoding="utf-8",
             )
             st.session_state.hitl_confirmed = True
-            st.success("완료 신호를 전달했습니다. 로그인 성공이 확인되면 다음 단계로 진행합니다.")
+            st.success("완료 신호를 전달했습니다. 즉시 다음 단계로 진행합니다.")
         if c_run_2.button("🔄 상태 새로고침", use_container_width=True):
             st.rerun()
         if c_run_3.button("⛔ 수집 중단", use_container_width=True):
@@ -504,26 +548,37 @@ def main() -> None:
             try:
                 result = _finalize_collection_process(process, queue)
 
-                out_path = Path(st.session_state.pending_output_name or _default_output_name())
+                fallback_url = st.session_state.pending_selected_url or selected_url
+                out_path = _resolve_result_path(
+                    st.session_state.pending_output_name, fallback_url
+                )
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                out_path.write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
 
                 st.session_state.latest_result = result
                 st.session_state.latest_file = str(out_path)
 
-                _save_history({
-                    "label": st.session_state.pending_selected_label or selected_label,
-                    "url": st.session_state.pending_selected_url or selected_url,
-                    "file": str(out_path.resolve()),
-                    "collected_at": result.get("collected_at", datetime.utcnow().isoformat()),
-                    "count": len(result.get("items", [])),
-                })
+                _save_history(
+                    {
+                        "label": out_path.name,
+                        "url": st.session_state.pending_selected_url or selected_url,
+                        "file": str(out_path.resolve()),
+                        "collected_at": result.get(
+                            "collected_at", datetime.utcnow().isoformat()
+                        ),
+                        "count": len(result.get("items", [])),
+                    }
+                )
                 st.session_state.viewing_result = result
-                st.session_state.viewing_label = st.session_state.pending_selected_label or selected_label
+                st.session_state.viewing_label = out_path.name
                 st.session_state.viewing_file = str(out_path.resolve())
                 st.session_state.chat_history = []
 
-                st.success(f"완료: {len(result.get('items', []))}건 저장됨 → {out_path}")
+                st.success(
+                    f"완료: {len(result.get('items', []))}건 저장됨 → {out_path}"
+                )
             except Exception as e:
                 st.error(f"수집 실패: {e}")
             finally:
@@ -595,7 +650,9 @@ def main() -> None:
             with st.chat_message("assistant"):
                 with st.spinner("답변 생성 중..."):
                     try:
-                        answer = _answer_with_llm(user_q, result, st.session_state.chat_history)
+                        answer = _answer_with_llm(
+                            user_q, result, st.session_state.chat_history
+                        )
                     except Exception as e:
                         answer = f"챗봇 응답 실패: {e}"
                     st.write(answer)
@@ -608,7 +665,7 @@ def main() -> None:
         dl_filename = Path(
             st.session_state.get("viewing_file")
             or st.session_state.latest_file
-            or _default_output_name()
+            or _default_output_name(selected_url)
         ).name
         st.download_button(
             label="JSON 다운로드",

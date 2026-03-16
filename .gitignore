@@ -5,6 +5,7 @@ __pycache__/
 # Virtual env / local env
 .venv/
 .env
+!.env.sample
 
 # Runtime state
 .ejarn_history.json

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>eJARN Streamlit Launcher</title>
+    <style>
+      :root {
+        --bg: #f4f7fb;
+        --card: #ffffff;
+        --text: #0f172a;
+        --muted: #64748b;
+        --primary: #1d4ed8;
+        --ok: #16a34a;
+        --warn: #ea580c;
+        --border: #e2e8f0;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          Segoe UI,
+          Roboto,
+          Arial,
+          sans-serif;
+        color: var(--text);
+        background: linear-gradient(180deg, #f8fafc 0%, var(--bg) 100%);
+      }
+      .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+      }
+      .head {
+        margin-bottom: 14px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      p.lead {
+        margin: 8px 0 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .status {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .status.ok {
+        color: var(--ok);
+      }
+      .status.warn {
+        color: var(--warn);
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      button,
+      a.btn {
+        border: 1px solid var(--border);
+        background: #fff;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 14px;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      button.primary,
+      a.btn.primary {
+        background: var(--primary);
+        color: #fff;
+        border-color: var(--primary);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 14px;
+        margin-top: 14px;
+      }
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        background: #fff;
+      }
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      ol {
+        margin: 0;
+        padding-left: 18px;
+        line-height: 1.7;
+      }
+      li + li {
+        margin-top: 6px;
+      }
+      .cmd {
+        margin-top: 10px;
+        padding: 10px 12px;
+        background: #f8fafc;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .help {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      code {
+        background: #f1f5f9;
+        border-radius: 6px;
+        padding: 2px 6px;
+      }
+      @media (max-width: 900px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="head">
+          <h1>eJARN Collector Web Launcher</h1>
+          <p class="lead">
+            GitHub의 이 페이지는 로컬 PC에서 실행 중인 Streamlit 앱으로 이동하는
+            안내/실행 페이지입니다.
+          </p>
+        </div>
+
+        <div class="row">
+          <button id="openLocal" class="primary">로컬 Streamlit 열기</button>
+          <button id="copyCmd">실행 명령 복사</button>
+          <a
+            class="btn"
+            href="https://github.com/jh104kim/jh104kim.github.io"
+            target="_blank"
+            rel="noreferrer"
+            >GitHub 저장소 열기</a
+          >
+        </div>
+
+        <div id="status" class="status warn">
+          먼저 PC에서 Streamlit을 실행한 뒤, 로컬 Streamlit 열기 버튼을
+          눌러주세요.
+        </div>
+
+        <div class="grid">
+          <div class="panel">
+            <h2>사용 순서</h2>
+            <ol>
+              <li>PC에서 프로젝트 폴더로 이동합니다.</li>
+              <li>
+                가상환경을 활성화한 뒤
+                <code>streamlit run streamlit_app.py</code>를 실행합니다.
+              </li>
+              <li>
+                이 페이지에서 <strong>로컬 Streamlit 열기</strong> 버튼을
+                누릅니다.
+              </li>
+              <li>
+                열린 Streamlit 화면에서 수집을 실행하고 결과를 확인합니다.
+              </li>
+              <li>
+                결과 JSON은 프로젝트의 <code>result/</code> 폴더에 저장됩니다.
+              </li>
+            </ol>
+          </div>
+
+          <div class="panel">
+            <h2>실행 명령</h2>
+            <div id="cmd" class="cmd">cd jh104kim.github.io
+streamlit run streamlit_app.py</div>
+            <div class="help">
+              - GitHub 페이지는 Python 프로세스를 직접 실행하지 않습니다.<br />
+              - 브라우저 보안 정책 때문에 GitHub 페이지에서 로컬 Streamlit을
+              iframe으로 안정적으로 임베드하는 방식은 권장되지 않습니다.<br />
+              - 가장 안정적인 방식은 <code>localhost:8501</code>을 새 탭으로
+              여는 것입니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="help">
+          - 즉, GitHub의 <code>index.html</code>은 "실행 안내 + 로컬 앱 열기"
+          역할을 합니다.<br />
+          - 현재 구조에서는 <strong>기존 Python 코드 수정 없이</strong> 이
+          방식으로 운영 가능합니다.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const openBtn = document.getElementById("openLocal");
+      const copyBtn = document.getElementById("copyCmd");
+      const cmdEl = document.getElementById("cmd");
+
+      openBtn.addEventListener("click", () => {
+        statusEl.textContent =
+          "로컬 Streamlit 주소를 새 탭으로 엽니다: http://127.0.0.1:8501";
+        statusEl.className = "status ok";
+        window.open("http://127.0.0.1:8501", "_blank", "noopener,noreferrer");
+      });
+
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(cmdEl.textContent);
+          statusEl.textContent = "실행 명령을 클립보드에 복사했습니다.";
+          statusEl.className = "status ok";
+        } catch (_) {
+          statusEl.textContent =
+            "클립보드 복사에 실패했습니다. 아래 명령을 수동으로 복사해주세요.";
+          statusEl.className = "status warn";
+        }
+      });
+    </script>
+  </body>
+</html>
