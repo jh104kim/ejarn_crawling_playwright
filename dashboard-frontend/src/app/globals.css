@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/*
+  Dashboard theme based on DESIGN.md (Cursor-inspired warm minimalism).
+  - Warm cream surfaces
+  - Warm near-black text
+  - oklab borders (with rgba fallback)
+  - Pill tags + large-blur atmospheric shadows
+*/
+:root {
+  --bg: #f2f1ed;
+  --fg: #26251e;
+  --muted-fg: rgba(38, 37, 30, 0.55);
+
+  --surface-100: #f7f7f4;
+  --surface-200: #f2f1ed;
+  --surface-300: #ebeae5;
+  --surface-400: #e6e5e0;
+  --surface-500: #e1e0db;
+
+  --accent: #f54e00;
+  --error: #cf2d56;
+  --success: #1f8a65;
+
+  --border-10: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+  --border-20: oklab(0.263084 -0.00230259 0.0124794 / 0.2);
+  --border-55: rgba(38, 37, 30, 0.55);
+  --border-fallback-10: rgba(38, 37, 30, 0.1);
+  --border-fallback-20: rgba(38, 37, 30, 0.2);
+
+  --shadow-card: rgba(0, 0, 0, 0.14) 0px 28px 70px,
+    rgba(0, 0, 0, 0.1) 0px 14px 32px, var(--border-10) 0px 0px 0px 1px;
+  --shadow-ambient: rgba(0, 0, 0, 0.02) 0px 0px 16px,
+    rgba(0, 0, 0, 0.008) 0px 0px 8px;
+
+  --radius-card: 8px;
+  --radius-pill: 9999px;
+
+  /*
+    Google fonts disabled to avoid Turbopack font resolution errors on some environments.
+    We keep the 3-voice typography idea (display/body/mono) with high-quality system fallbacks.
+  */
+  --font-display: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-body: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-display), system-ui, "Segoe UI", Arial, sans-serif;
+}
+
+::selection {
+  background: rgba(245, 78, 0, 0.18);
+}
+
+/* Utilities (kept minimal; prefer Tailwind for layout) */
+.cursor-border {
+  border: 1px solid var(--border-10);
+  border-color: var(--border-10);
+}
+
+@supports not (color: oklab(0% 0 0)) {
+  .cursor-border {
+    border-color: var(--border-fallback-10);
+  }
+}

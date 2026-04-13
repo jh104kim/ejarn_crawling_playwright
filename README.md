@@ -69,8 +69,6 @@ EJARN_BATCH_SECTION_MAX=10
 ## 실행 방법
 
 ```bash
-cd ejarn_collector
-
 # 기본 실행 (HITL 로그인 강제, 기본 max 사용)
 python main.py
 
@@ -86,6 +84,59 @@ python main.py --publication-jarn-regular -o publication_jarn_regular.json
 # Streamlit 앱 실행
 streamlit run streamlit_app.py
 ```
+
+## 대시보드 (Next.js, shadcn 스타일)
+
+`result/` 아래에 정리된 JSON을 읽어 **월별(2603/2604) 요약, 품질 신호(404/기본값), 탐색 테이블**을 제공하는 웹 대시보드입니다.
+
+### 요구사항
+
+- Node.js 18+ 권장
+
+### 실행 방법
+
+프로젝트 루트에서:
+
+```bash
+cd dashboard-frontend
+npm install
+npm run dev
+```
+
+접속:
+
+- `http://localhost:3000`
+
+### 주요 페이지
+
+- `/monthly?yymm=2604`: 월별 KPI + TopN + 월간 브리프(규칙 기반)
+- `/explore`: 최근 파일 일부 기사 미리보기(테이블)
+- `/quality`: 404/기본값 오염 신호 요약 + 파일별 품질
+- `/trends`: 월별 추이(현재는 MVP로 월별 파일 수)
+
+### 데이터 읽는 규칙(현재 MVP)
+
+- 기본적으로 프로젝트 루트의 `result/` 및 `result/<YYMM>/` 아래 `*.json`을 스캔합니다.
+- 동일 `link`가 여러 파일에 중복될 수 있어, UI에서는 복합 key를 사용합니다.
+
+### 트러블슈팅
+
+- `Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'`
+  - 일부 환경에서 Turbopack + `next/font/google` 조합이 실패할 수 있습니다.
+  - 본 대시보드는 Google 폰트를 비활성화하고 시스템 폰트 fallback으로 동작하도록 처리했습니다.
+
+## README → PPTX 요약(보고서) 생성
+
+README 내용을 간략한 보고서 형태 PPTX로 변환합니다.
+
+```bash
+pip install -r requirements.txt
+python scripts/make_crawling_pptx.py
+```
+
+출력:
+
+- `크롤링방법정리.pptx` (프로젝트 루트)
 
 ### 전 섹션 일괄 수집(기준일 이후, 섹션당 N건)
 
