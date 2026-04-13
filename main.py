@@ -4,6 +4,7 @@ eJARN 최신 기사 수집기 CLI.
   python main.py [--max N] [--output path.json] [--no-verify]   # 파이프라인
   python main.py --agent [--max N] [--output path.json]          # LangChain 에이전트 (Tool 호출)
   python main.py --publication-jarn-regular [-o publication_jarn_regular.json]  # Publication > Jarn Regular February 5건
+  python main.py --batch-all-sections [--since YYYY-MM-DD] [--result-subdir 2604] [--max-list-articles N] [--batch-section-max 10]
 """
 
 import argparse
@@ -16,10 +17,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.config import (
+    EJARN_BATCH_SECTION_MAX,
     EJARN_LIST_URL,
     EJARN_MAX_ARTICLES,
+    EJARN_MAX_LIST_ARTICLES,
+    EJARN_MAX_TOPICS,
     EJARN_LOGIN_EMAIL,
     EJARN_LOGIN_PASSWORD,
+    EJARN_RESULT_SUBDIR,
+    EJARN_SINCE_DATE,
 )
 
 
@@ -44,6 +50,19 @@ OUTPUT_BASENAME_BY_URL = {
     "https://www.ejarn.com/category/special_issue_index": "Special_Issue",
     "https://www.ejarn.com/category/regular_issue_index": "Regular_Issue",
 }
+
+# (list_url, mode, output_basename) — mode: jarn_series | category
+# 카테고리를 먼저 수집(로그인 직후 세션·DOM 안정), Jarn 시리즈는 토픽 순회가 길어 뒤로 둠.
+BATCH_SECTION_SPECS = [
+    ("https://www.ejarn.com/category/eJarn_news_index", "category", "eJarn_News"),
+    ("https://www.ejarn.com/category/cover_story_index", "category", "Cover_Story"),
+    ("https://www.ejarn.com/category/exhibition_index", "category", "Event_Exhibition"),
+    ("https://www.ejarn.com/category/report_index", "category", "Report"),
+    ("https://www.ejarn.com/category/special_issue_index", "category", "Special_Issue"),
+    ("https://www.ejarn.com/category/regular_issue_index", "category", "Regular_Issue"),
+    ("https://www.ejarn.com/series/index/1", "jarn_series", "Jarn_Regular"),
+    ("https://www.ejarn.com/series/index/2", "jarn_series", "Jarn_Special"),
+]
 
 RESULT_DIR = Path(__file__).resolve().parent / "result"
 
@@ -122,6 +141,35 @@ def main() -> None:
         action="store_true",
         help="Publication > Jarn Regular > February 섹션의 article-list.clm-feature 기사 5건 수집",
     )
+    parser.add_argument(
+        "--batch-all-sections",
+        action="store_true",
+        help="8개 섹션 일괄 수집(HITL 로그인 1회), --since 이후 기사만",
+    )
+    parser.add_argument(
+        "--since",
+        type=str,
+        default="",
+        help="배치 기준일 (>= 해당일 포함). YYYY-MM-DD. 기본: EJARN_SINCE_DATE 또는 2026-03-15",
+    )
+    parser.add_argument(
+        "--result-subdir",
+        type=str,
+        default="",
+        help="result 하위 폴더명 (예: 2604). 기본: EJARN_RESULT_SUBDIR 또는 현재 YYMM",
+    )
+    parser.add_argument(
+        "--max-list-articles",
+        type=int,
+        default=0,
+        help="배치 시 목록 스크롤 상한 힌트(0이면 EJARN_MAX_LIST_ARTICLES; 실제 스크롤은 섹션 최대치에 맞춰 자동 확대)",
+    )
+    parser.add_argument(
+        "--batch-section-max",
+        type=int,
+        default=0,
+        help="배치 섹션당 since 이후 최대 기사 수(0이면 EJARN_BATCH_SECTION_MAX, 기본 10)",
+    )
     args = parser.parse_args()
 
     # main.py 실행 시 항상 HITL + env 로그인 정보 사용 강제
@@ -139,6 +187,51 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    if args.batch_all_sections:
+        if args.publication_jarn_regular:
+            print(
+                "수집 실패: --batch-all-sections 와 --publication-jarn-regular 는 함께 쓸 수 없습니다.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        from src.pipeline import run_batch_pipeline_since_login
+        from src.tools.dates import parse_since_date_env
+
+        since_str = (args.since or EJARN_SINCE_DATE or "2026-03-15").strip()
+        subdir = (args.result_subdir or EJARN_RESULT_SUBDIR or datetime.now().strftime("%y%m")).strip()
+        max_list = (
+            args.max_list_articles if args.max_list_articles > 0 else EJARN_MAX_LIST_ARTICLES
+        )
+        section_max = (
+            args.batch_section_max if args.batch_section_max > 0 else EJARN_BATCH_SECTION_MAX
+        )
+        try:
+            since_d = parse_since_date_env(since_str)
+        except ValueError as e:
+            print(f"수집 실패: {e}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            collections = run_batch_pipeline_since_login(
+                BATCH_SECTION_SPECS,
+                since_d,
+                max_list,
+                EJARN_MAX_TOPICS,
+                section_max,
+                email,
+                password,
+            )
+        except Exception as e:
+            print(f"수집 실패: {e}", file=sys.stderr)
+            sys.exit(1)
+        out_dir = RESULT_DIR / subdir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for basename, coll in collections.items():
+            path = out_dir / f"{basename}_{subdir}.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(coll.model_dump(mode="json"), f, ensure_ascii=False, indent=2)
+            print(f"저장: {path} ({len(coll.items)}건)", file=sys.stderr)
+        return
 
     # 실행 초기 메뉴 선택 (list-url를 직접 준 경우는 생략)
     selected_list_url = args.list_url.strip() if args.list_url else ""

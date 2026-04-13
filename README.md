@@ -25,13 +25,16 @@ eJARN 기사 수집 후, 고정 JSON 스키마로 정규화하여 출력하는 P
 
 ## 요구사항
 
-- Python 3.10+
-- Playwright 설치 및 브라우저 설치
+- Python 3.10+ (권장: 3.12)
+- Playwright 설치 및 브라우저 설치 (또는 로컬 Chrome 사용)
 
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium
 ```
+
+> 네트워크 정책 등으로 `playwright install chromium` 다운로드가 실패할 수 있습니다.  
+> 이 경우에도 로컬 PC에 Chrome이 설치되어 있으면, 본 프로젝트는 Playwright의 `channel="chrome"`로 실행되어 **ChromeDriver 없이** 동작합니다.
 
 ## 환경 변수 (.env)
 
@@ -56,6 +59,11 @@ EJARN_USE_LLM_SUMMARY=true
 EJARN_USE_LLM_CLASSIFY=true
 EJARN_MAX_ARTICLES=10
 EJARN_LIST_URL=https://www.ejarn.com/series/list/February/2026
+EJARN_SINCE_DATE=2026-03-15
+EJARN_RESULT_SUBDIR=2604
+EJARN_MAX_LIST_ARTICLES=400
+EJARN_MAX_TOPICS=200
+EJARN_BATCH_SECTION_MAX=10
 ```
 
 ## 실행 방법
@@ -78,6 +86,31 @@ python main.py --publication-jarn-regular -o publication_jarn_regular.json
 # Streamlit 앱 실행
 streamlit run streamlit_app.py
 ```
+
+### 전 섹션 일괄 수집(기준일 이후, 섹션당 N건)
+
+HITL(사람) 로그인 1회 후 아래 8개 섹션을 순회 수집하고 `result/<subdir>/`에 저장합니다.
+
+- Publication > Jarn Regular
+- Publication > Jarn Special
+- eJarn News
+- Cover Story
+- Event > Exhibition
+- Report
+- Special Issue
+- Regular Issue
+
+예시:
+
+```bash
+python main.py --batch-all-sections --since 2026-03-15 --result-subdir 2604 --batch-section-max 10
+```
+
+동작:
+
+- `--since`: 게시일이 해당 날짜 이상(\(\ge\))인 기사만 포함
+- `--batch-section-max`: 섹션당 최대 저장 건수 (기본 10)
+- 결과 파일: `result/2604/<섹션명>_2604.json`
 
 ### GitHub의 index.html로 시작하는 운영 방식
 
@@ -196,3 +229,4 @@ streamlit run streamlit_app.py
 
 - `main.py`는 운영 기준으로 HITL 로그인 강제 정책을 사용합니다.
 - 따라서 비로그인/비대화형 자동 실행을 원하면 별도 실행 스크립트에서 `run_pipeline`을 직접 호출하도록 분리하는 방식을 권장합니다.
+- 본 프로젝트는 Selenium 기반이 아니며 **ChromeDriver가 필요하지 않습니다**.

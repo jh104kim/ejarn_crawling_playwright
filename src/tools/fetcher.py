@@ -8,7 +8,8 @@ import time
 import random
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from typing import List, Optional
 import requests
 from bs4 import BeautifulSoup
@@ -479,6 +480,16 @@ class ArticleDetail:
     date_str: str
     topic: str
     body: str
+
+
+@dataclass
+class FetchedArticleRow:
+    """배치 수집: 목록+상세 한 건 + Jarn 토픽 메타(선택)."""
+    entry: ListEntry
+    detail: ArticleDetail
+    source_topic: str = ""
+    source_topic_url: str = ""
+    related_titles: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1019,6 +1030,65 @@ def fetch_article_detail(link: str) -> ArticleDetail:
     return ArticleDetail(link=link, date_str=date_str, topic=topic or "(No title)", body=body or "")
 
 
+def _extract_article_date_str(html: str, soup: BeautifulSoup) -> str:
+    """
+    상세 HTML에서 게시일 문자열(YYYY.MM.DD) 추출.
+    기존에는 html[:3000]만 검사해 로그인·긴 헤더 페이지에서 날짜를 놓치는 경우가 많았음.
+    """
+    # 1) meta property / name
+    for key, val in (
+        ("property", "article:published_time"),
+        ("property", "article:modified_time"),
+        ("property", "og:updated_time"),
+        ("name", "publishdate"),
+        ("name", "date"),
+    ):
+        tag = soup.find("meta", attrs={key: val})
+        if tag and tag.get("content"):
+            c = (tag.get("content") or "").strip()
+            m = re.search(r"(\d{4})[-.](\d{2})[-.](\d{2})", c)
+            if m:
+                return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    # 2) <time datetime="...">
+    for tm in soup.find_all("time"):
+        dt = tm.get("datetime") or ""
+        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", dt)
+        if m:
+            return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    # 3) JSON-LD (datePublished)
+    for script in soup.find_all("script", type=re.compile(r"ld\+json", re.I)):
+        raw = script.string or script.get_text() or ""
+        if "datePublished" in raw:
+            m = re.search(r'"datePublished"\s*:\s*"([^"]+)"', raw)
+            if m:
+                c = m.group(1)
+                m2 = re.search(r"(\d{4})[-.](\d{2})[-.](\d{2})", c)
+                if m2:
+                    return f"{m2.group(1)}.{m2.group(2)}.{m2.group(3)}"
+
+    # 4) 본문·헤더 텍스트 앞부분
+    head_text = soup.get_text(separator=" ", strip=True)[:12000]
+    m = re.search(r"(\d{4}\.\d{2}\.\d{2})", head_text)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", head_text)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    # 5) HTML 문자열 (상한)
+    window = html[:200000] if len(html) > 200000 else html
+    m = re.search(r"(\d{4}\.\d{2}\.\d{2})", window)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", window)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+    return ""
+
+
 def _extract_body_topic_date(html: str, link: str) -> tuple[str, str, str]:
     """HTML에서 본문·제목·날짜 추출. (body, topic, date_str)."""
     soup = BeautifulSoup(html, "lxml")
@@ -1036,10 +1106,7 @@ def _extract_body_topic_date(html: str, link: str) -> tuple[str, str, str]:
             topic = (t.get_text() or "").strip().replace(" | eJARN.com", "").strip()
     topic = (topic or "").replace(" | eJARN.com", "").strip()
 
-    date_str = ""
-    date_match = re.search(r"(\d{4}\.\d{2}\.\d{2})", html[:3000])
-    if date_match:
-        date_str = date_match.group(1)
+    date_str = _extract_article_date_str(html, soup)
 
     body = ""
     try:
@@ -1075,6 +1142,14 @@ def _extract_body_topic_date(html: str, link: str) -> tuple[str, str, str]:
     if "To read more" in body:
         body = body.split("To read more")[0].strip()
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    if not date_str and body:
+        m = re.search(r"(\d{4}\.\d{2}\.\d{2})", body[:8000])
+        if m:
+            date_str = m.group(1)
+        else:
+            m2 = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", body[:8000])
+            if m2:
+                date_str = f"{m2.group(1)}.{m2.group(2)}.{m2.group(3)}"
     return (body or "", topic, date_str)
 
 
@@ -1190,5 +1265,307 @@ def fetch_jarn_regular_february_articles(
         browser.close()
 
     return (entries, details)
+
+
+# ---------------------------------------------------------------------------
+# 배치: 기준일 이후 + 스크롤 목록 확장 (단일 page 세션용)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_ejarn_href(href: str) -> str:
+    if not href:
+        return ""
+    if href.startswith("http"):
+        return href
+    return "https://www.ejarn.com" + (href if href.startswith("/") else "/" + href)
+
+
+def parse_article_list_entries_from_html(html: str) -> List[ListEntry]:
+    """목록 HTML에서 기사 링크·날짜·제목 추출 (URL 기준 중복 제거, 순서 유지)."""
+    soup = BeautifulSoup(html, "lxml")
+    entries: List[ListEntry] = []
+    for a in soup.select('a[href*="/article/detail/"]'):
+        href = _normalize_ejarn_href(a.get("href") or "")
+        if not href or "/article/detail/" not in href:
+            continue
+        if any(e.link == href for e in entries):
+            continue
+        text = re.sub(r"\s+", " ", (a.get_text() or "").strip())
+        date_match = re.search(r"(\d{4}\.\d{2}\.\d{2})", text)
+        date_str = date_match.group(1) if date_match else ""
+        prefix_match = re.match(r"^([^\d]+)?\s*\d{4}\.\d{2}\.\d{2}\s*", text)
+        if prefix_match:
+            title = text[prefix_match.end() :].strip()
+        else:
+            title = re.sub(r"\d{4}\.\d{2}\.\d{2}\s*", "", text).strip() or text[:120]
+        entries.append(ListEntry(link=href, date_str=date_str, title=title))
+    return entries
+
+
+def _try_expand_ejarn_list(page) -> None:
+    """목록 더보기/지연 로딩 유도(사이트마다 버튼 문구 상이)."""
+    labels = (
+        "Load more",
+        "VIEW MORE",
+        "View more",
+        "Show more",
+        "더보기",
+    )
+    for label in labels:
+        try:
+            page.get_by_text(label, exact=True).first.click(timeout=2000)
+            _random_delay(700, 1400)
+        except Exception:
+            try:
+                page.get_by_role("link", name=re.compile(re.escape(label), re.I)).first.click(timeout=2000)
+                _random_delay(700, 1400)
+            except Exception:
+                try:
+                    page.get_by_role("button", name=re.compile(re.escape(label), re.I)).first.click(timeout=2000)
+                    _random_delay(700, 1400)
+                except Exception:
+                    pass
+
+
+def _goto_list_page(page, url: str) -> None:
+    """목록/인덱스 로드. networkidle은 장시간·무한 대기를 유발할 수 있어 사용하지 않음."""
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    except Exception:
+        page.goto(url, wait_until="commit", timeout=45000)
+    _random_delay(800, 1500)
+    try:
+        page.wait_for_load_state("load", timeout=12000)
+    except Exception:
+        pass
+    _random_delay(400, 900)
+    try:
+        page.wait_for_selector(
+            'a[href*="/article/detail/"]',
+            timeout=12000,
+            state="attached",
+        )
+    except Exception:
+        pass
+    for _ in range(3):
+        try:
+            page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight * 0.25)")
+        except Exception:
+            pass
+        _random_delay(200, 450)
+    _try_expand_ejarn_list(page)
+    _random_delay(500, 1000)
+
+
+def _scroll_collect_article_entries(
+    page,
+    list_url: str,
+    max_unique: int,
+    max_scroll_rounds: int = 80,
+    stable_needed: int = 5,
+) -> List[ListEntry]:
+    """목록 URL에서 스크롤하며 기사 링크를 최대 max_unique개까지 수집."""
+    _goto_list_page(page, list_url)
+    ordered: List[ListEntry] = []
+    seen: set[str] = set()
+    stable = 0
+    prev_n = 0
+    for round_idx in range(max(1, max_scroll_rounds)):
+        html = _safe_page_content(page)
+        for e in parse_article_list_entries_from_html(html):
+            if e.link not in seen:
+                seen.add(e.link)
+                ordered.append(e)
+                if len(ordered) >= max_unique:
+                    return ordered
+        n = len(ordered)
+        # 링크가 0개일 때는 stable 카운트로 조기 종료하지 않음(JS·로그인 DOM 지연)
+        if n == 0:
+            stable = 0
+        elif n == prev_n:
+            stable += 1
+            if stable >= stable_needed:
+                break
+        else:
+            stable = 0
+        prev_n = n
+        try:
+            page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+        except Exception:
+            pass
+        _random_delay(550, 1100)
+        if n > 0 and round_idx % 4 == 3:
+            _try_expand_ejarn_list(page)
+    return ordered
+
+
+def _fetch_article_detail_on_page(page, entry: ListEntry) -> ArticleDetail:
+    try:
+        page.goto(entry.link, wait_until="domcontentloaded", timeout=20000)
+    except Exception:
+        page.goto(entry.link, wait_until="commit", timeout=20000)
+    _random_delay(800, 1500)
+    art_html = _safe_page_content(page)
+    body, topic, date_str = _extract_body_topic_date(art_html, entry.link)
+    return ArticleDetail(
+        link=entry.link,
+        date_str=date_str or entry.date_str,
+        topic=topic or entry.title,
+        body=body or "",
+    )
+
+
+def fetch_category_since_on_page(
+    page,
+    list_url: str,
+    since: date,
+    max_list_articles: int,
+    max_section_articles: int,
+) -> List[FetchedArticleRow]:
+    """카테고리형 목록: 스크롤 수집 후 since 이상만 상세 확인, 섹션당 최대 max_section_articles건."""
+    import warnings
+
+    from src.tools.dates import list_entry_may_include_since, parse_ejarn_date
+
+    cap = max(1, max_section_articles)
+    entries = _scroll_collect_article_entries(page, list_url, max_list_articles)
+    rows: List[FetchedArticleRow] = []
+    for entry in entries:
+        if len(rows) >= cap:
+            break
+        if not list_entry_may_include_since(entry.date_str, since):
+            continue
+        detail = _fetch_article_detail_on_page(page, entry)
+        dd = parse_ejarn_date(detail.date_str) or parse_ejarn_date(entry.date_str)
+        if dd is None:
+            warnings.warn(f"날짜 없음으로 제외: {entry.link}", UserWarning)
+            continue
+        if dd < since:
+            continue
+        rows.append(FetchedArticleRow(entry=entry, detail=detail))
+    return rows
+
+
+def fetch_jarn_series_since_on_page(
+    page,
+    index_url: str,
+    since: date,
+    max_list_per_topic: int,
+    max_topics: int,
+    max_section_articles: int,
+) -> List[FetchedArticleRow]:
+    """Jarn Regular(1) / Special(2): 토픽 순회, since 이후 기사, 섹션당 최대 max_section_articles건."""
+    import warnings
+
+    from src.tools.dates import list_entry_may_include_since, parse_ejarn_date
+
+    cap = max(1, max_section_articles)
+
+    _goto_list_page(page, index_url)
+    soup = BeautifulSoup(_safe_page_content(page), "lxml")
+    topic_candidates: list[tuple[str, str]] = []
+    for a in soup.select('a[href*="/series/list/"]'):
+        href = _normalize_ejarn_href(a.get("href") or "")
+        if "/series/list/" not in href:
+            continue
+        title_text = re.sub(r"\s+", " ", (a.get_text() or "").strip())
+        if not title_text:
+            title_text = href.rstrip("/").split("/")[-2].replace("-", " ")
+        if any(u == href for _, u in topic_candidates):
+            continue
+        topic_candidates.append((title_text, href))
+        if len(topic_candidates) >= max(1, max_topics):
+            break
+
+    all_rows: List[FetchedArticleRow] = []
+    seen_links: set[str] = set()
+
+    for topic_name, topic_url in topic_candidates:
+        if len(all_rows) >= cap:
+            break
+        try:
+            entries = _scroll_collect_article_entries(page, topic_url, max_list_per_topic)
+            for entry in entries:
+                if len(all_rows) >= cap:
+                    break
+                if entry.link in seen_links:
+                    continue
+                if not list_entry_may_include_since(entry.date_str, since):
+                    continue
+                detail = _fetch_article_detail_on_page(page, entry)
+                dd = parse_ejarn_date(detail.date_str) or parse_ejarn_date(entry.date_str)
+                if dd is None:
+                    warnings.warn(f"날짜 없음으로 제외: {entry.link}", UserWarning)
+                    continue
+                if dd < since:
+                    continue
+                seen_links.add(entry.link)
+                otitles: List[str] = []
+                for e2 in entries:
+                    if e2.link == entry.link:
+                        continue
+                    ld2 = parse_ejarn_date(e2.date_str)
+                    if ld2 is not None and ld2 >= since:
+                        otitles.append(e2.title)
+                all_rows.append(
+                    FetchedArticleRow(
+                        entry=entry,
+                        detail=detail,
+                        source_topic=topic_name,
+                        source_topic_url=topic_url,
+                        related_titles=list(dict.fromkeys(otitles))[:30],
+                    )
+                )
+        except Exception as e:
+            warnings.warn(f"Jarn 토픽 실패 {topic_url}: {e}", UserWarning)
+
+    return all_rows
+
+
+def execute_batch_fetch_on_logged_in_page(
+    page,
+    specs: List[tuple[str, str, str]],
+    since: date,
+    max_list_articles: int,
+    max_topics: int,
+    max_section_articles: int,
+) -> dict[str, List[FetchedArticleRow]]:
+    """
+    이미 로그인된 page에서 섹션별 수집.
+
+    Parameters
+    ----------
+    specs : list of (list_url, mode, basename)
+        mode는 'jarn_series' 또는 'category'.
+    max_section_articles : 섹션당 since 통과 후 최대 저장 건수.
+    """
+    import sys
+    import time
+
+    scroll_cap = max(max_list_articles, max(1, max_section_articles) * 15)
+
+    out: dict[str, List[FetchedArticleRow]] = {}
+    for list_url, mode, basename in specs:
+        url = (list_url or "").strip()
+        print(f"[batch] 섹션 시작: {basename} ({url})", file=sys.stderr)
+        if mode == "jarn_series":
+            rows = fetch_jarn_series_since_on_page(
+                page,
+                url,
+                since,
+                max_list_per_topic=scroll_cap,
+                max_topics=max_topics,
+                max_section_articles=max_section_articles,
+            )
+        elif mode == "category":
+            rows = fetch_category_since_on_page(
+                page, url, since, scroll_cap, max_section_articles
+            )
+        else:
+            raise ValueError(f"알 수 없는 batch mode: {mode!r}")
+        out[basename] = rows
+        print(f"[batch] 섹션 완료: {basename} ({len(rows)}건)", file=sys.stderr)
+        time.sleep(0.35)
+    return out
 
 

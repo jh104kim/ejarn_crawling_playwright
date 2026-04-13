@@ -38,6 +38,17 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 EJARN_USE_LLM_SUMMARY = _bool(os.getenv("EJARN_USE_LLM_SUMMARY", "false"))
 EJARN_USE_LLM_CLASSIFY = _bool(os.getenv("EJARN_USE_LLM_CLASSIFY", "false"))
 
+# 일괄 수집(배치): 기준일 이후만 (YYYY-MM-DD 권장)
+EJARN_SINCE_DATE = os.getenv("EJARN_SINCE_DATE", "").strip()
+# result 하위 폴더 (예: 2604 → result/2604/)
+EJARN_RESULT_SUBDIR = os.getenv("EJARN_RESULT_SUBDIR", "").strip()
+# 목록에서 스크롤로 모을 최대 기사 링크 수 (섹션/토픽당 상한)
+EJARN_MAX_LIST_ARTICLES = int(os.getenv("EJARN_MAX_LIST_ARTICLES", "400"))
+# Jarn 시리즈: 인덱스에서 가져올 최대 토픽 수
+EJARN_MAX_TOPICS = int(os.getenv("EJARN_MAX_TOPICS", "200"))
+# 배치: 섹션당 최종 저장 기사 수 상한 (since 필터 통과 후)
+EJARN_BATCH_SECTION_MAX = int(os.getenv("EJARN_BATCH_SECTION_MAX", "10"))
+
 # HTTP 헤더
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

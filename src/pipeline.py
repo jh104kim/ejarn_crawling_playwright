@@ -2,8 +2,8 @@
 파이프라인: 목록 수집 -> 상세 수집 -> 요약/분류 -> ArticleCollection 생성.
 구조상 AI가 Tool을 호출하는 흐름을 순차 실행으로 구현. 확장 시 LLM 에이전트로 교체 가능.
 """
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import date, datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 from src.schemas import ArticleCollection, ArticleItem
 from src.config import (
@@ -19,7 +19,12 @@ from src.tools.fetcher import (
     fetch_jarn_regular_february_articles,
     fetch_jarn_regular_topic_latest,
     fetch_jarn_special_topic_latest,
+    execute_batch_fetch_on_logged_in_page,
+    FetchedArticleRow,
     ListEntry,
+    _apply_stealth,
+    _login_with_playwright,
+    _make_browser_context,
 )
 from src.tools.summarizer import summarize_text
 from src.tools.classifier import (
@@ -359,3 +364,106 @@ def run_jarn_regular_balanced(
             continue
 
     return ArticleCollection(source=source_label, collected_at=collected_at, items=items)
+
+
+def build_collection_from_fetched_rows(
+    rows: List[FetchedArticleRow],
+    source_label: str,
+) -> ArticleCollection:
+    """배치 수집 행(FetchedArticleRow)을 ArticleCollection으로 변환."""
+    collected_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    items: list[ArticleItem] = []
+    for row in rows:
+        try:
+            entry = row.entry
+            detail = row.detail
+            topic = detail.topic or entry.title
+            date_iso = _date_to_iso(detail.date_str or entry.date_str)
+            body = detail.body
+            summary = summarize_text(body) if body else topic[:500]
+            company = classify_company(topic, body)
+            related_comp = classify_comp(topic, body)
+            product_type = classify_product_type(topic, body)
+            market_segment = classify_market_segment(topic, body)
+            refrigerant = classify_refrigerant(topic, body)
+            application = classify_application(topic, body)
+            technology = classify_technology(topic, body)
+            category = classify_category(topic, body)
+            item = ArticleItem(
+                date=date_iso or collected_at[:10],
+                topic=topic,
+                summary=summary,
+                link=entry.link,
+                source_topic=row.source_topic or "",
+                source_topic_url=row.source_topic_url or "",
+                related_titles=list(row.related_titles or []),
+                company=company,
+                related_comp=related_comp,
+                product_type=product_type,
+                market_segment=market_segment,
+                refrigerant=refrigerant,
+                application=application,
+                technology=technology,
+                category=category,
+            )
+            items.append(item)
+        except Exception as e:
+            import warnings
+
+            warnings.warn(f"Skip row {row.entry.link}: {e}", UserWarning)
+    return ArticleCollection(source=source_label, collected_at=collected_at, items=items)
+
+
+def run_batch_pipeline_since_login(
+    specs: List[Tuple[str, str, str]],
+    since: date,
+    max_list_articles: int,
+    max_topics: int,
+    max_section_articles: int,
+    login_email: str,
+    login_password: str,
+) -> Dict[str, ArticleCollection]:
+    """
+    Playwright 1회(HITL 로그인) 후 specs 순서대로 섹션 수집.
+
+    specs: (list_url, mode, basename), mode는 'jarn_series' | 'category'
+    max_section_articles: 섹션당 since 이후 최대 저장 건수.
+    """
+    import sys
+    from playwright.sync_api import sync_playwright
+
+    email = (login_email or "").strip()
+    password = (login_password or "").strip()
+    if not email or not password:
+        raise ValueError("배치 수집에는 .env의 EJARN_LOGIN_EMAIL / EJARN_LOGIN_PASSWORD가 필요합니다.")
+
+    raw: Dict[str, List[FetchedArticleRow]] = {}
+    with sync_playwright() as p:
+        browser, context = _make_browser_context(
+            p,
+            headless=False,
+            use_chrome_channel=True,
+        )
+        try:
+            page = context.new_page()
+            _apply_stealth(page)
+            print("[batch] Chrome에서 HITL 로그인을 완료한 뒤 진행합니다.", file=sys.stderr)
+            _login_with_playwright(page, email, password, enable_hitl=True)
+            raw = execute_batch_fetch_on_logged_in_page(
+                page,
+                list(specs),
+                since,
+                max_list_articles,
+                max_topics,
+                max_section_articles,
+            )
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+    out: Dict[str, ArticleCollection] = {}
+    for basename, rows in raw.items():
+        out[basename] = build_collection_from_fetched_rows(rows, f"eJARN ({basename})")
+    return out
