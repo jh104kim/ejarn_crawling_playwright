@@ -17,6 +17,11 @@ eJARN 기사 수집 후, 고정 JSON 스키마로 정규화하여 출력하는 P
 - 수집 기록은 `.ejarn_history.json`으로 저장되며, 앱 재시작 후에도 `result/` 폴더의 JSON 결과를 자동 스캔해 히스토리에 표시합니다.
 - 수집 히스토리 라벨은 JSON의 주제명이 아니라 **파일명**으로 표시됩니다.
 
+
+### 관련 문서
+
+- 2605 크롤링 실행 가이드: `docs/ejarn_2605_crawling_guide.md`
+
 ### 결과 파일 저장 위치
 
 - CLI(`main.py`)와 Streamlit(`streamlit_app.py`) 모두 결과 JSON을 프로젝트 내 `result/` 폴더에 저장합니다.
